@@ -1,0 +1,66 @@
+-- ======================================
+-- Interactive User Creation Script 
+-- ======================================
+
+SET VERIFY OFF
+SET HEADING ON
+SET LINESIZE 200
+SET PAGESIZE 100
+
+PROMPT ============================================================
+PROMPT ENTER USER DETAILS
+PROMPT ============================================================
+
+ACCEPT v_username     CHAR PROMPT 'Enter Username : '
+ACCEPT v_password     CHAR PROMPT 'Enter Password : '
+
+PROMPT
+PROMPT ============================================================
+PROMPT AVAILABLE TABLESPACES (EXCLUDING SYSTEM, SYSAUX, APEX)
+PROMPT ============================================================
+
+COLUMN tablespace_name FORMAT A30
+
+SELECT tablespace_name 
+FROM dba_tablespaces
+WHERE UPPER(tablespace_name) NOT IN ('SYSTEM','SYSAUX','APEX','APEX_230100','APEX_240200','TEMP')
+ORDER BY tablespace_name;
+
+PROMPT
+ACCEPT v_tbs CHAR PROMPT 'Choose Tablespace from above list: '
+
+PROMPT
+ACCEPT v_size CHAR PROMPT 'Enter Quota Size (e.g. 100M or UNLIMITED): '
+
+PROMPT ============================================================
+PROMPT USER CREATION SUMMARY
+PROMPT ============================================================
+PROMPT Username          : &v_username
+PROMPT Password          : ********
+PROMPT Tablespace        : &v_tbs
+PROMPT Quota             : &v_size
+PROMPT ============================================================
+
+ACCEPT confirm CHAR PROMPT 'Proceed to create user? (Y/N): '
+
+COLUMN exec_cmd NEW_VALUE exec_cmd NOPRINT
+SELECT CASE WHEN UPPER('&confirm')='Y' THEN 'YES' ELSE 'NO' END AS exec_cmd FROM dual;
+
+SET SERVEROUTPUT ON
+
+BEGIN
+    IF '&&exec_cmd' = 'YES' THEN
+        EXECUTE IMMEDIATE '
+            CREATE USER &v_username IDENTIFIED BY "&v_password"
+            DEFAULT TABLESPACE &v_tbs
+            QUOTA &v_size ON &v_tbs
+        ';
+        EXECUTE IMMEDIATE 'GRANT CREATE SESSION TO &v_username';
+        DBMS_OUTPUT.PUT_LINE('User &v_username created successfully.');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('User creation cancelled.');
+    END IF;
+END;
+/
+
+SET VERIFY ON
