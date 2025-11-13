@@ -1,0 +1,101 @@
+#This script will find the log, audit, trace, trm files present in the server and prompts to ask how many days of files need to kept. In addition to that, it will find the unwanted files and zip files that can be removed.
+
+#!/bin/bash
+# ==============================================================
+#  LOG / AUD / ZIP CLEANUP SCRIPT WITH FULL PATH DISPLAY
+# ==============================================================
+
+echo "=============================================================="
+echo "          LOG / AUD / TRACE CLEANUP UTILITY"
+echo "=============================================================="
+
+# ---------------------------------------------------------------
+# 1. FIND ALL DIRECTORIES CONTAINING LOG/AUD/TRACE/ZIP FILES
+# ---------------------------------------------------------------
+echo "Searching for *.log, *.aud, *.trc, *.trm, *.zip files..."
+echo
+
+LOG_DIRS=$(find / -type f \( \
+    -name "*.log" -o -name "*.aud" -o -name "*.trc" -o -name "*.trm" -o -name "*.zip" \
+    \) 2>/dev/null | awk -F/ 'NF{NF--; print}' OFS=/ | sort -u)
+
+echo "Directories Found:"
+echo "--------------------------------------------------------------"
+echo "$LOG_DIRS"
+echo "--------------------------------------------------------------"
+
+# ---------------------------------------------------------------
+# 2. ASK USER: HOW MANY DAYS TO KEEP
+# ---------------------------------------------------------------
+echo
+read -p "How many days of logs should be kept? : " KEEP_DAYS
+
+if ! [[ "$KEEP_DAYS" =~ ^[0-9]+$ ]]; then
+    echo "Invalid number. Exiting..."
+    exit 1
+fi
+
+# ---------------------------------------------------------------
+# 3. FIND FILES OLDER THAN KEEP_DAYS
+# ---------------------------------------------------------------
+echo
+echo "Scanning for files older than $KEEP_DAYS days..."
+
+OLD_FILES=$(find $LOG_DIRS -type f \
+    \( -name "*.log" -o -name "*.aud" -o -name "*.trc" -o -name "*.trm" -o -name "*.zip" \) \
+    -mtime +$KEEP_DAYS 2>/dev/null)
+
+FILE_COUNT=$(echo "$OLD_FILES" | grep -c "/")
+
+echo
+echo "--------------------------------------------------------------"
+echo "Total files older than $KEEP_DAYS days: $FILE_COUNT"
+echo "--------------------------------------------------------------"
+
+if [ "$FILE_COUNT" -eq 0 ]; then
+    echo "No old files found. Exiting..."
+    exit 0
+fi
+
+echo
+echo "Old Files (full paths):"
+echo "--------------------------------------------------------------"
+echo "$OLD_FILES"
+echo "--------------------------------------------------------------"
+
+# ---------------------------------------------------------------
+# 4. ASK CONFIRMATION TO DELETE
+# ---------------------------------------------------------------
+read -p "Do you want to DELETE these files? (Y/N): " CONFIRM
+
+if [[ "$CONFIRM" != "Y" && "$CONFIRM" != "y" ]]; then
+    echo "Cleanup cancelled."
+    exit 0
+fi
+
+# ---------------------------------------------------------------
+# 5. DELETE FILES
+# ---------------------------------------------------------------
+echo
+echo "Deleting files older than $KEEP_DAYS days..."
+echo "$OLD_FILES" | xargs rm -f
+
+echo "Cleanup completed."
+echo "--------------------------------------------------------------"
+
+# ---------------------------------------------------------------
+# 6. SHOW ALL REMAINING UNWANTED FILES (FULL PATHS)
+# ---------------------------------------------------------------
+echo
+echo "Scanning for remaining unwanted files (*.log *.aud *.trc *.trm *.zip)..."
+echo
+
+REMAINING=$(find / -type f \
+    \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.log" -o -name "*.aud" -o -name "*.trc" -o -name "*.trm" \) \
+    2>/dev/null)
+
+echo "--------------------------------------------------------------"
+echo "$REMAINING"
+echo "--------------------------------------------------------------"
+
+echo "Script execution completed."
