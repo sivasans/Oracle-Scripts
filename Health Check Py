@@ -1,0 +1,229 @@
+#Python 3 should be Installed before running the script
+#cx_Oracle library need to be Installed
+#Oracle Instant Client Library for cx_Oracle
+
+#Run as python3 <file_name.py>
+
+#!/usr/bin/env python3
+
+import cx_Oracle
+import subprocess
+import socket
+import datetime
+import os
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+ORACLE_USER = "sys"
+ORACLE_PASS = "welcome1"
+ORACLE_DSN  = "PROD"      # or "hostname:port/service"
+ORACLE_ROLE = cx_Oracle.SYSDBA
+
+HTML_OUTPUT_PATH = "/tmp/oracle_healthcheck_report.html"
+
+# ============================================================
+# DB CONNECTION
+# ============================================================
+def get_connection():
+    return cx_Oracle.connect(
+        ORACLE_USER,
+        ORACLE_PASS,
+        ORACLE_DSN,
+        mode=ORACLE_ROLE
+    )
+
+# ============================================================
+# SERVER INFO
+# ============================================================
+def get_server_name():
+    return socket.gethostname()
+
+def get_mount_points():
+    cmd = "df -h | grep -v tmpfs"
+    output = subprocess.getoutput(cmd)
+    return output
+
+def get_cpu_load_today():
+    # Min + Max load for the day using sar
+    cmd = "sar -q | awk 'NR>3 {print $5}'"
+    sar_out = subprocess.getoutput(cmd).splitlines()
+
+    try:
+        numeric_vals = [float(x) for x in sar_out if x.replace('.', '', 1).isdigit()]
+        return min(numeric_vals), max(numeric_vals)
+    except:
+        return "N/A", "N/A"
+
+# ============================================================
+# ORACLE HEALTH
+# ============================================================
+def get_database_status():
+    cmd = "ps -ef | grep pmon | grep -v grep"
+    return "RUNNING" if subprocess.getoutput(cmd) else "DOWN"
+
+def get_listener_status():
+    cmd = "lsnrctl status"
+    output = subprocess.getoutput(cmd)
+    return "RUNNING" if "READY" in output else "DOWN"
+
+# ============================================================
+# TABLESPACE INFO
+# ============================================================
+def get_tablespace_info(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            a.tablespace_name,
+            ROUND(a.total_mb,2),
+            ROUND(b.free_mb,2),
+            ROUND((a.total_mb - b.free_mb),2),
+            ROUND((b.free_mb/a.total_mb)*100,2)
+        FROM 
+            (SELECT tablespace_name, SUM(bytes)/1024/1024 total_mb 
+             FROM dba_data_files GROUP BY tablespace_name) a,
+            (SELECT tablespace_name, SUM(bytes)/1024/1024 free_mb 
+             FROM dba_free_space GROUP BY tablespace_name) b
+        WHERE a.tablespace_name = b.tablespace_name
+        ORDER BY 1
+    """)
+    rows = cursor.fetchall()
+    return rows
+
+# ============================================================
+# BACKUP STATUS
+# ============================================================
+def get_backup_status(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            TO_CHAR(start_time, 'DD-MON-YYYY HH24:MI'),
+            TO_CHAR(end_time, 'DD-MON-YYYY HH24:MI'),
+            status,
+            input_type
+        FROM v$rman_backup_job_details
+        ORDER BY start_time DESC FETCH FIRST 5 ROWS ONLY
+    """)
+    return cursor.fetchall()
+
+# ============================================================
+# HTML GENERATION
+# ============================================================
+def generate_html(server_name, db_status, listener_status,
+                  mount_points, cpu_min, cpu_max,
+                  tbs_rows, backup_rows):
+
+    html = f"""
+    <html>
+    <head>
+        <title>Oracle Health Check Report</title>
+        <style>
+            body {{ font-family: Arial; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
+            h2 {{ color: #b30000; }}
+        </style>
+    </head>
+
+    <body>
+        <h2>Oracle Health Check Report</h2>
+        <h3>Server: {server_name}</h3>
+        <h3>Date: {datetime.datetime.now()}</h3>
+
+        <h2>Database Status</h2>
+        <table>
+            <tr><th>Database</th><td>{db_status}</td></tr>
+            <tr><th>Listener</th><td>{listener_status}</td></tr>
+        </table>
+
+        <h2>CPU Load (Today)</h2>
+        <table>
+            <tr><th>Lowest Load</th><td>{cpu_min}</td></tr>
+            <tr><th>Highest Load</th><td>{cpu_max}</td></tr>
+        </table>
+
+        <h2>Mount Point Usage</h2>
+        <pre>{mount_points}</pre>
+
+        <h2>Tablespace Usage</h2>
+        <table>
+            <tr>
+                <th>Tablespace</th>
+                <th>Total MB</th>
+                <th>Free MB</th>
+                <th>Used MB</th>
+                <th>Free %</th>
+            </tr>
+    """
+
+    for t in tbs_rows:
+        html += f"""
+        <tr>
+            <td>{t[0]}</td>
+            <td>{t[1]}</td>
+            <td>{t[2]}</td>
+            <td>{t[3]}</td>
+            <td>{t[4]}</td>
+        </tr>
+        """
+
+    html += """
+        </table>
+
+        <h2>Recent RMAN Backups</h2>
+        <table>
+            <tr>
+                <th>Start Time</th>
+                <th>End Time</th>
+                <th>Status</th>
+                <th>Type</th>
+            </tr>
+    """
+
+    for b in backup_rows:
+        html += f"""
+        <tr>
+            <td>{b[0]}</td>
+            <td>{b[1]}</td>
+            <td>{b[2]}</td>
+            <td>{b[3]}</td>
+        </tr>
+        """
+
+    html += """
+        </table>
+    </body>
+    </html>
+    """
+
+    return html
+
+
+# ============================================================
+# MAIN FUNCTION
+# ============================================================
+def main():
+    server = get_server_name()
+    db_status = get_database_status()
+    listener_status = get_listener_status()
+    mount_points = get_mount_points()
+    cpu_min, cpu_max = get_cpu_load_today()
+
+    conn = get_connection()
+    tbs_rows = get_tablespace_info(conn)
+    backup_rows = get_backup_status(conn)
+
+    html = generate_html(server, db_status, listener_status,
+                         mount_points, cpu_min, cpu_max,
+                         tbs_rows, backup_rows)
+
+    with open(HTML_OUTPUT_PATH, "w") as f:
+        f.write(html)
+
+    print(f"\nHealth Check Completed!")
+    print(f"HTML Report Generated at: {HTML_OUTPUT_PATH}\n")
+
+
+if __name__ == "__main__":
+    main()
