@@ -1,0 +1,122 @@
+#Finds the User Consuming high CPU and it generates the user activity and session details when the username is given from the list in an HTML format
+#Install python 3 in the Server
+#Install cx_Oracle
+#Install Oracle Instant Client.
+
+#Run as python3 <filename.py>
+
+#!/usr/bin/env python3
+
+import cx_Oracle
+import datetime
+import os
+
+DB_USER = "sys"
+DB_PASS = "welcome1"
+DB_DSN  = "PROD as sysdba"
+
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+output_file = f"/tmp/user_cpu_activity_{timestamp}.html"
+
+SQL_CPU_USERS = """
+SELECT DISTINCT s.username
+FROM v$session s
+JOIN v$sesstat ss ON s.sid = ss.sid
+JOIN v$statname sn ON ss.statistic# = sn.statistic#
+WHERE sn.name = 'CPU used by this session'
+  AND s.username IS NOT NULL
+ORDER BY 1
+"""
+
+SQL_USER_ACTIVITY = """
+SELECT
+    s.sid,
+    s.serial#,
+    s.username,
+    s.osuser,
+    ROUND(ss.value/100,2) AS cpu_seconds,
+    s.status,
+    s.machine,
+    s.program,
+    s.module,
+    s.event,
+    s.wait_class,
+    s.seconds_in_wait,
+    s.blocking_session,
+    TO_CHAR(s.logon_time,'YYYY-MM-DD HH24:MI:SS'),
+    q.sql_text
+FROM v$session s
+JOIN v$sesstat ss ON s.sid = ss.sid
+JOIN v$statname sn ON ss.statistic# = sn.statistic#
+LEFT JOIN v$sql q ON s.sql_id = q.sql_id
+WHERE sn.name = 'CPU used by this session'
+  AND s.username = :usr
+ORDER BY ss.value DESC
+"""
+
+def html_header():
+    return """
+<html>
+<head>
+<title>User CPU Activity</title>
+<style>
+body { font-family: Arial; font-size: 14px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #444; padding: 6px; }
+th { background-color: #b30000; color: white; }
+tr:nth-child(even) { background: #f2f2f2; }
+pre { white-space: pre-wrap; font-family: Arial; }
+h2 { color: #b30000; }
+</style>
+</head>
+<body>
+<h1>User CPU Activity Report</h1><hr>
+"""
+
+def build_table(title, columns, rows):
+    html = f"<h2>{title}</h2><table><tr>"
+    for c in columns:
+        html += f"<th>{c}</th>"
+    html += "</tr>"
+    for r in rows:
+        html += "<tr>"
+        for col in r:
+            html += f"<td><pre>{col}</pre></td>"
+        html += "</tr>"
+    html += "</table><br><br>"
+    return html
+
+connection = cx_Oracle.connect(DB_USER, DB_PASS, DB_DSN, mode=cx_Oracle.SYSDBA)
+cursor = connection.cursor()
+
+cursor.execute(SQL_CPU_USERS)
+users = [r[0] for r in cursor.fetchall()]
+
+print("\nUsers consuming CPU:\n")
+for u in users:
+    print(f"- {u}")
+
+selected_user = input("\nEnter username from above list: ").upper()
+
+cursor.execute(SQL_USER_ACTIVITY, usr=selected_user)
+user_rows = cursor.fetchall()
+
+html = html_header()
+
+html += build_table(
+    f"CPU Activity for User: {selected_user}",
+    ["SID","SERIAL","USERNAME","OSUSER","CPU_SECONDS","STATUS",
+     "MACHINE","PROGRAM","MODULE","EVENT","WAIT_CLASS",
+     "SECONDS_IN_WAIT","BLOCKING_SESSION","LOGON_TIME","SQL_TEXT"],
+    user_rows
+)
+
+html += "</body></html>"
+
+with open(output_file, "w") as f:
+    f.write(html)
+
+cursor.close()
+connection.close()
+
+print(f"\nHTML report created:\n{output_file}\n")
