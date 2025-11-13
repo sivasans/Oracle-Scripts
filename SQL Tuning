@@ -1,0 +1,105 @@
+#Identifies the poor SQL Select Statement and lists the SQL ID to the user, when user gives the SQL ID as a Input it will bring the previous Execution plan, asks for running SQL Tune and Plan Push.
+
+SET LINESIZE 300
+SET PAGESIZE 200
+SET VERIFY OFF
+SET FEEDBACK ON
+SET SERVEROUTPUT ON
+
+PROMPT ==========================================================
+PROMPT SQL SELECTs WITH POOR PERFORMANCE (AUTO-DETECTED)
+PROMPT ==========================================================
+
+COLUMN sql_id FORMAT A15
+COLUMN old_plan FORMAT 9999999999
+COLUMN new_plan FORMAT 9999999999
+COLUMN old_time FORMAT 999,999,999
+COLUMN new_time FORMAT 999,999,999
+COLUMN change FORMAT 999,999
+COLUMN sql_text FORMAT A80
+
+WITH prev AS (
+    SELECT
+        sql_id,
+        plan_hash_value,
+        ROUND(AVG(elapsed_time/1000000)) AS prev_time
+    FROM dba_hist_sqlstat
+    GROUP BY sql_id, plan_hash_value
+),
+curr AS (
+    SELECT
+        sql_id,
+        plan_hash_value,
+        ROUND(AVG(elapsed_time/1000000)) AS cur_time
+    FROM v$sql
+    GROUP BY sql_id, plan_hash_value
+)
+SELECT
+    p.sql_id,
+    p.plan_hash_value AS previous_plan,
+    c.plan_hash_value AS current_plan,
+    p.prev_time AS old_avg_sec,
+    c.cur_time AS new_avg_sec,
+    (c.cur_time - p.prev_time) AS slow_by_sec,
+    SUBSTR(q.sql_text,1,80) AS sql_text
+FROM prev p
+JOIN curr c ON p.sql_id = c.sql_id
+JOIN v$sql q ON p.sql_id = q.sql_id
+WHERE c.cur_time > p.prev_time
+  AND UPPER(SUBSTR(q.sql_text,1,6)) = 'SELECT'
+ORDER BY (c.cur_time - p.prev_time) DESC;
+
+PROMPT
+PROMPT ==========================================================
+PROMPT ENTER SQL_ID TO TUNE (COPY FROM ABOVE OUTPUT)
+PROMPT ==========================================================
+
+ACCEPT sqlid PROMPT 'Enter SQL_ID: '
+
+PROMPT
+PROMPT RUN SQL TUNING ADVISOR FOR &sqlid ? (YES / NO)
+ACCEPT tune PROMPT 'Enter choice: '
+
+DECLARE
+  task_name VARCHAR2(200);
+BEGIN
+  IF UPPER('&tune') = 'YES' THEN
+     task_name := 'TUNE_TASK_' || '&sqlid';
+     BEGIN
+       DBMS_SQLTUNE.DROP_TUNING_TASK(task_name => task_name);
+     EXCEPTION WHEN OTHERS THEN NULL;
+     END;
+     task_name := DBMS_SQLTUNE.CREATE_TUNING_TASK(sql_id => '&sqlid', task_name => task_name);
+     DBMS_SQLTUNE.EXECUTE_TUNING_TASK(task_name => task_name);
+     DBMS_OUTPUT.PUT_LINE('Tuning Task Created: ' || task_name);
+     DBMS_OUTPUT.PUT_LINE('Run this to see recommendations:');
+     DBMS_OUTPUT.PUT_LINE('SELECT DBMS_SQLTUNE.REPORT_TUNING_TASK(''' || task_name || ''') FROM dual;');
+  ELSE
+     DBMS_OUTPUT.PUT_LINE('SQL Tuning skipped.');
+  END IF;
+END;
+/
+
+PROMPT
+PROMPT ==========================================================
+PROMPT PUSH PLAN BASELINE FOR &sqlid ? (YES / NO)
+PROMPT ==========================================================
+ACCEPT pb PROMPT 'Enter choice: '
+
+DECLARE
+  l_cnt NUMBER;
+BEGIN
+  IF UPPER('&pb') = 'YES' THEN
+     l_cnt := DBMS_SPM.LOAD_PLANS_FROM_CURSOR_CACHE(sql_id => '&sqlid', fixed => 'YES');
+     DBMS_OUTPUT.PUT_LINE('Plan Baseline Created and FIXED. Count: ' || l_cnt);
+  ELSE
+     DBMS_OUTPUT.PUT_LINE('Plan Baseline skipped.');
+  END IF;
+END;
+/
+
+PROMPT
+PROMPT ==========================================================
+PROMPT SCRIPT COMPLETED
+PROMPT ==========================================================
+
