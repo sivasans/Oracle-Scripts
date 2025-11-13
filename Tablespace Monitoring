@@ -1,0 +1,72 @@
+-- ============================================================
+-- Script Name : tablespace_monitor.sql
+-- Purpose     : Interactive Tablespace Monitoring
+-- Description : Lists existing tablespaces first, then prompts for one
+--               to display details like size, free space, autoextend, etc.
+-- ============================================================
+
+SET LINESIZE 200
+SET PAGESIZE 100
+SET VERIFY OFF
+COLUMN tablespace_name FORMAT A25
+COLUMN contents FORMAT A10
+COLUMN status FORMAT A10
+COLUMN file_name FORMAT A70
+COLUMN autoextensible FORMAT A10
+COLUMN creation_time FORMAT A20
+
+PROMPT
+PROMPT ============================================================
+PROMPT Existing Tablespaces in the Database
+PROMPT ============================================================
+
+SELECT 
+    tablespace_name, 
+    contents, 
+    status
+FROM 
+    dba_tablespaces
+ORDER BY 
+    tablespace_name;
+
+PROMPT
+PROMPT ============================================================
+ACCEPT tbs_name CHAR PROMPT 'Enter Tablespace Name from above list (or % for all): '
+PROMPT ============================================================
+PROMPT Fetching details for Tablespace: &tbs_name ...
+PROMPT ============================================================
+
+SELECT 
+    df.tablespace_name,
+    df.file_name,
+    ROUND(df.bytes/1024/1024,2) AS size_mb,
+    ROUND((df.bytes - NVL(fs.free_space,0))/1024/1024,2) AS used_mb,
+    ROUND(NVL(fs.free_space,0)/1024/1024,2) AS free_mb,
+    df.autoextensible,
+    TO_CHAR(df.creation_time,'DD-MON-YYYY HH24:MI:SS') AS creation_time
+FROM 
+    dba_data_files df
+    LEFT JOIN (
+        SELECT 
+            tablespace_name, 
+            file_id, 
+            SUM(bytes) AS free_space
+        FROM 
+            dba_free_space
+        GROUP BY 
+            tablespace_name, file_id
+    ) fs 
+    ON df.tablespace_name = fs.tablespace_name 
+    AND df.file_id = fs.file_id
+WHERE 
+    UPPER(df.tablespace_name) LIKE UPPER('&tbs_name')
+ORDER BY 
+    df.creation_time DESC;
+
+PROMPT
+PROMPT Query Completed Successfully.
+PROMPT ============================================================
+PROMPT Displayed results for Tablespace: &tbs_name
+PROMPT ============================================================
+
+SET VERIFY ON
